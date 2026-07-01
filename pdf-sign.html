@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<title>PDF 電子簽名工具</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/signature_pad/4.1.7/signature_pad.umd.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+
+header{background:#16213e;padding:10px 20px;display:flex;align-items:center;gap:12px;border-bottom:1px solid #0f3460;flex-shrink:0}
+header h1{font-size:16px;color:#e94560}
+.file-label{background:#0f3460;border:1px solid #e94560;color:#e94560;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px}
+.file-label:hover{background:#e94560;color:#fff}
+#file-input{display:none}
+
+.main{display:flex;flex:1;overflow:hidden}
+
+/* ── PDF side ── */
+.pdf-area{flex:1;overflow:auto;display:flex;flex-direction:column;align-items:center;padding:20px;background:#0f1b35;gap:12px}
+
+.drop-hint{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:#4a6fa5;font-size:18px;height:100%;width:100%;border:2px dashed #4a6fa5;border-radius:12px}
+.drop-hint.drag-over{border-color:#e94560;color:#e94560}
+.drop-hint svg{width:48px;height:48px;opacity:.5}
+
+.page-nav{display:none;align-items:center;gap:12px;background:#16213e;padding:6px 16px;border-radius:20px;font-size:13px}
+.nav-btn{background:#0f3460;border:none;color:#e0e0e0;padding:4px 12px;border-radius:4px;cursor:pointer;font-size:13px}
+.nav-btn:disabled{opacity:.3;cursor:default}
+.nav-btn:not(:disabled):hover{background:#e94560}
+
+/* PDF canvas container — sigs float inside here */
+#canvas-wrap{position:relative;box-shadow:0 4px 24px rgba(0,0,0,.6);display:none}
+#pdf-canvas{display:block}
+
+/* Placed signature elements */
+.sig-placed{
+  position:absolute;
+  cursor:grab;
+  user-select:none;
+  touch-action:none;
+  outline:2px dashed transparent;
+  transition:outline-color .15s;
+}
+.sig-placed:hover{outline-color:#e94560}
+.sig-placed:active{cursor:grabbing}
+.sig-placed img{display:block;width:100%;height:100%;mix-blend-mode:multiply}
+.del-btn{
+  position:absolute;top:-10px;right:-10px;
+  width:20px;height:20px;background:#e94560;color:#fff;
+  border-radius:50%;font-size:13px;line-height:20px;text-align:center;
+  cursor:pointer;display:none;z-index:5;font-weight:bold;
+}
+.sig-placed:hover .del-btn{display:block}
+.rsz-handle{
+  position:absolute;bottom:-6px;right:-6px;
+  width:14px;height:14px;background:#2a9d8f;border-radius:3px;
+  cursor:se-resize;display:none;z-index:5;
+}
+.sig-placed:hover .rsz-handle{display:block}
+
+/* ── Sidebar ── */
+.sidebar{width:280px;background:#16213e;padding:16px;display:flex;flex-direction:column;gap:10px;border-left:1px solid #0f3460;flex-shrink:0;overflow-y:auto}
+.sidebar h3{font-size:11px;color:#aaa;text-transform:uppercase;letter-spacing:1px}
+
+.tab-row{display:flex;gap:4px}
+.tab-btn{flex:1;padding:6px;border:1px solid #0f3460;border-radius:6px;background:transparent;color:#aaa;font-size:12px;cursor:pointer}
+.tab-btn.active{background:#0f3460;color:#e94560;border-color:#e94560}
+.tab-pane{display:none;flex-direction:column;gap:8px}
+.tab-pane.active{display:flex}
+
+/* Checkerboard (shows transparency) */
+.checker{
+  background-image:linear-gradient(45deg,#2a2a3e 25%,transparent 25%),linear-gradient(-45deg,#2a2a3e 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#2a2a3e 75%),linear-gradient(-45deg,transparent 75%,#2a2a3e 75%);
+  background-size:12px 12px;
+  background-position:0 0,0 6px,6px -6px,-6px 0;
+  background-color:#1a1a2e;
+}
+
+.sig-wrap{border:2px solid #0f3460;border-radius:8px;overflow:hidden}
+#sig-canvas{display:block;cursor:crosshair;background:transparent}
+
+/* Drag handle on the preview */
+.sig-preview-wrap{
+  position:relative;border:2px solid #0f3460;border-radius:8px;overflow:hidden;
+}
+.drag-hint{
+  position:absolute;bottom:0;left:0;right:0;
+  background:rgba(233,69,96,.85);color:#fff;font-size:11px;
+  text-align:center;padding:4px;pointer-events:none;
+  opacity:0;transition:opacity .2s;
+}
+.sig-preview-wrap:hover .drag-hint{opacity:1}
+#sig-preview{display:block;width:100%;cursor:grab}
+#sig-preview:active{cursor:grabbing}
+
+.pen-row{display:flex;align-items:center;gap:8px}
+.pen-row label{font-size:11px;color:#aaa;white-space:nowrap}
+input[type=color]{width:32px;height:28px;border:none;background:none;cursor:pointer;padding:0;border-radius:4px}
+input[type=range]{flex:1;accent-color:#e94560}
+
+.upload-drop{border:2px dashed #0f3460;border-radius:8px;padding:16px;text-align:center;color:#4a6fa5;font-size:12px;cursor:pointer;background:#0f1b35}
+.upload-drop:hover{border-color:#e94560;color:#e94560}
+#sig-img-input{display:none}
+
+.btn{padding:8px 12px;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500}
+.btn:disabled{opacity:.35;cursor:default}
+.btn-ghost{background:#0f3460;color:#aaa}
+.btn-ghost:not(:disabled):hover{background:#1a3a6e;color:#e0e0e0}
+.btn-success{background:#2a9d8f;color:#fff}
+.btn-success:not(:disabled):hover{background:#21867a}
+.divider{border:none;border-top:1px solid #0f3460}
+.sig-count{font-size:12px;color:#aaa;text-align:center;padding:4px}
+.tip{font-size:11px;color:#4a6fa5;line-height:1.7;padding:8px;background:#0f1b35;border-radius:6px}
+.row{display:flex;gap:6px}
+.row button{flex:1}
+.size-row{display:flex;align-items:center;gap:8px}
+.size-row label{font-size:11px;color:#aaa;white-space:nowrap}
+.size-row span{font-size:11px;color:#2a9d8f;min-width:32px}
+
+/* Ghost image while dragging from sidebar */
+#drag-ghost{
+  position:fixed;pointer-events:none;opacity:.75;z-index:9999;
+  transform:translate(-50%,-50%);display:none;
+}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>✍️ PDF 簽名工具</h1>
+  <label class="file-label" for="file-input">選擇 PDF</label>
+  <input type="file" id="file-input" accept=".pdf">
+  <span style="font-size:12px;color:#4a6fa5">或拖入 PDF 到左側</span>
+</header>
+
+<div class="main">
+
+  <div class="pdf-area" id="pdf-area">
+    <div class="drop-hint" id="drop-hint">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <path d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+      </svg>
+      拖入 PDF 或點擊「選擇 PDF」
+    </div>
+    <div class="page-nav" id="page-nav">
+      <button class="nav-btn" id="prev-btn">◀ 上一頁</button>
+      <span id="page-info">1 / 1</span>
+      <button class="nav-btn" id="next-btn">下一頁 ▶</button>
+    </div>
+    <div id="canvas-wrap">
+      <canvas id="pdf-canvas"></canvas>
+      <!-- placed sigs go here as absolute divs -->
+    </div>
+  </div>
+
+  <div class="sidebar">
+    <h3>簽名來源</h3>
+    <div class="tab-row">
+      <button class="tab-btn active" data-tab="draw">✏️ 手寫</button>
+      <button class="tab-btn" data-tab="upload">🖼 上傳</button>
+    </div>
+
+    <!-- Draw tab -->
+    <div class="tab-pane active" id="tab-draw">
+      <div class="sig-wrap checker">
+        <canvas id="sig-canvas" width="248" height="140"></canvas>
+      </div>
+      <div class="pen-row">
+        <label>顏色</label>
+        <input type="color" id="pen-color" value="#140064">
+        <label>粗細</label>
+        <input type="range" id="pen-size" min="1" max="8" value="2.5" step="0.5">
+      </div>
+      <div class="row">
+        <button class="btn btn-ghost" id="clear-btn">清除</button>
+        <button class="btn btn-ghost" id="save-btn" title="存到瀏覽器，下次開啟自動可載入">💾 記住</button>
+        <button class="btn btn-ghost" id="load-btn" title="載入上次記住的簽名">📂 載入</button>
+      </div>
+    </div>
+
+    <!-- Upload tab -->
+    <div class="tab-pane" id="tab-upload">
+      <label class="upload-drop" for="sig-img-input">
+        點擊或拖入簽名圖片<br>
+        <small style="color:#4a6fa5">建議透明背景 PNG</small>
+      </label>
+      <input type="file" id="sig-img-input" accept="image/*">
+    </div>
+
+    <!-- Shared: preview + drag instruction -->
+    <div id="preview-section" style="display:none;flex-direction:column;gap:6px">
+      <div style="font-size:11px;color:#2a9d8f;font-weight:600">👇 拖曳簽名到 PDF 上放置</div>
+      <div class="sig-preview-wrap checker" id="preview-wrap">
+        <img id="sig-preview" src="" draggable="false">
+        <div class="drag-hint">拖曳到 PDF 上</div>
+      </div>
+      <button class="btn btn-ghost" id="download-sig-btn" style="width:100%">⬇ 另存簽名圖檔 (PNG)</button>
+    </div>
+
+    <div class="size-row">
+      <label>大小</label>
+      <input type="range" id="sig-size" min="60" max="400" value="160">
+      <span id="sig-size-val">160px</span>
+    </div>
+
+    <hr class="divider">
+    <div class="sig-count" id="sig-count">尚未放置簽名</div>
+    <button class="btn btn-success" id="download-btn" disabled>⬇ 下載簽名 PDF</button>
+    <hr class="divider">
+    <div class="tip">
+      1. 手寫或上傳簽名<br>
+      2. <strong style="color:#e94560">拖曳預覽圖到 PDF</strong><br>
+      3. 放置後可繼續拖動微調<br>
+      4. 下載完成的 PDF
+    </div>
+  </div>
+</div>
+
+<!-- Ghost image that follows cursor during drag -->
+<img id="drag-ghost" src="" alt="">
+
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+const SCALE = 1.5;
+let pdfJsDoc = null, currentPage = 1, totalPages = 0;
+let originalBytes = null, renderTask = null;
+let sigPad = null;
+let activeTab = 'draw';
+let currentSigDataUrl = null;   // whatever is ready to drop
+let placedSigs = {};            // { page: [{x,y,w,h,dataUrl}] }
+
+// Elements
+const fileInput    = document.getElementById('file-input');
+const pdfArea      = document.getElementById('pdf-area');
+const dropHint     = document.getElementById('drop-hint');
+const pageNav      = document.getElementById('page-nav');
+const canvasWrap   = document.getElementById('canvas-wrap');
+const pdfCanvas    = document.getElementById('pdf-canvas');
+const sigCanvas    = document.getElementById('sig-canvas');
+const penColorEl   = document.getElementById('pen-color');
+const penSizeEl    = document.getElementById('pen-size');
+const clearBtn     = document.getElementById('clear-btn');
+const saveBtn      = document.getElementById('save-btn');
+const loadBtn      = document.getElementById('load-btn');
+const downloadSigBtn = document.getElementById('download-sig-btn');
+const sigImgInput  = document.getElementById('sig-img-input');
+const previewSec   = document.getElementById('preview-section');
+const sigPreview   = document.getElementById('sig-preview');
+const sigSizeEl    = document.getElementById('sig-size');
+const sigSizeVal   = document.getElementById('sig-size-val');
+const downloadBtn  = document.getElementById('download-btn');
+const dragGhost    = document.getElementById('drag-ghost');
+const sigCount     = document.getElementById('sig-count');
+const prevBtn      = document.getElementById('prev-btn');
+const nextBtn      = document.getElementById('next-btn');
+const pageInfo     = document.getElementById('page-info');
+
+// ── Signature Pad ─────────────────────────────────────────
+sigPad = new SignaturePad(sigCanvas, {
+  backgroundColor: 'rgba(0,0,0,0)',
+  penColor: penColorEl.value,
+  minWidth: 1, maxWidth: 2.5,
+});
+penColorEl.addEventListener('input', () => { sigPad.penColor = penColorEl.value; });
+penSizeEl.addEventListener('input', () => {
+  const v = parseFloat(penSizeEl.value);
+  sigPad.minWidth = v * 0.5; sigPad.maxWidth = v;
+});
+sigPad.addEventListener('endStroke', () => {
+  currentSigDataUrl = sigPad.toDataURL('image/png');
+  showPreview(currentSigDataUrl);
+});
+clearBtn.addEventListener('click', () => {
+  sigPad.clear();
+  currentSigDataUrl = null;
+  previewSec.style.display = 'none';
+});
+saveBtn.addEventListener('click', () => {
+  if(!currentSigDataUrl){ alert('請先畫簽名'); return; }
+  localStorage.setItem('saved-sig', currentSigDataUrl);
+  saveBtn.textContent = '✅'; setTimeout(() => saveBtn.textContent = '💾 儲存', 1500);
+});
+loadBtn.addEventListener('click', () => {
+  const d = localStorage.getItem('saved-sig');
+  if(!d){ alert('尚未儲存過簽名'); return; }
+  const img = new Image();
+  img.onload = () => {
+    sigPad.clear();
+    sigCanvas.getContext('2d').drawImage(img, 0, 0, sigCanvas.width, sigCanvas.height);
+    currentSigDataUrl = d;
+    showPreview(d);
+  };
+  img.src = d;
+});
+
+downloadSigBtn.addEventListener('click', () => {
+  if(!currentSigDataUrl){ alert('請先畫簽名或上傳圖片'); return; }
+  const a = document.createElement('a');
+  a.href = currentSigDataUrl;
+  a.download = 'signature_' + Date.now() + '.png';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+});
+
+// ── Tabs ─────────────────────────────────────────────────
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    activeTab = btn.dataset.tab;
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b===btn));
+    document.querySelectorAll('.tab-pane').forEach(p => p.classList.toggle('active', p.id==='tab-'+activeTab));
+  });
+});
+
+// ── Upload ────────────────────────────────────────────────
+sigImgInput.addEventListener('change', e => loadSigImg(e.target.files[0]));
+function loadSigImg(file){
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = e => { currentSigDataUrl = e.target.result; showPreview(e.target.result); };
+  reader.readAsDataURL(file);
+}
+
+function showPreview(dataUrl){
+  sigPreview.src = dataUrl;
+  previewSec.style.display = 'flex';
+}
+
+// ── Size slider ───────────────────────────────────────────
+sigSizeEl.addEventListener('input', () => { sigSizeVal.textContent = sigSizeEl.value + 'px'; });
+
+// ════════════════════════════════════════════════════════
+// DRAG FROM SIDEBAR PREVIEW → PDF
+// Uses Pointer Events for reliable cross-browser drag
+// ════════════════════════════════════════════════════════
+let draggingFromSidebar = false;
+
+sigPreview.addEventListener('pointerdown', e => {
+  if(!currentSigDataUrl || !pdfJsDoc) return;
+  e.preventDefault();
+  draggingFromSidebar = true;
+  sigPreview.setPointerCapture(e.pointerId);
+
+  // Show ghost image following cursor
+  dragGhost.src = currentSigDataUrl;
+  const w = parseInt(sigSizeEl.value);
+  const h = Math.round(w * 0.4);
+  dragGhost.style.width  = w + 'px';
+  dragGhost.style.height = h + 'px';
+  dragGhost.style.display = 'block';
+  moveDragGhost(e.clientX, e.clientY);
+});
+
+sigPreview.addEventListener('pointermove', e => {
+  if(!draggingFromSidebar) return;
+  moveDragGhost(e.clientX, e.clientY);
+});
+
+sigPreview.addEventListener('pointerup', e => {
+  if(!draggingFromSidebar) return;
+  draggingFromSidebar = false;
+  dragGhost.style.display = 'none';
+
+  // Find drop position relative to canvas-wrap
+  const wrapRect = canvasWrap.getBoundingClientRect();
+  const cx = e.clientX - wrapRect.left;
+  const cy = e.clientY - wrapRect.top;
+
+  // Check if dropped inside the PDF area
+  if(cx < 0 || cy < 0 || cx > canvasWrap.offsetWidth || cy > canvasWrap.offsetHeight) return;
+
+  const w = parseInt(sigSizeEl.value);
+  const h = Math.round(w * 0.4);
+  const sig = { x: cx - w/2, y: cy - h/2, w, h, dataUrl: currentSigDataUrl };
+  if(!placedSigs[currentPage]) placedSigs[currentPage] = [];
+  placedSigs[currentPage].push(sig);
+  addSigEl(sig);
+  updateUI();
+});
+
+function moveDragGhost(cx, cy){
+  dragGhost.style.left = cx + 'px';
+  dragGhost.style.top  = cy + 'px';
+}
+
+// ── Create a placed sig element ───────────────────────────
+function addSigEl(sig){
+  const div = document.createElement('div');
+  div.className = 'sig-placed';
+  div.style.cssText = `left:${sig.x}px;top:${sig.y}px;width:${sig.w}px;height:${sig.h}px`;
+
+  const img = document.createElement('img');
+  img.src = sig.dataUrl;
+  img.draggable = false;
+
+  const del = document.createElement('div');
+  del.className = 'del-btn';
+  del.textContent = '×';
+  del.addEventListener('click', e => {
+    e.stopPropagation();
+    canvasWrap.removeChild(div);
+    const arr = placedSigs[currentPage];
+    const i = arr.indexOf(sig);
+    if(i > -1) arr.splice(i,1);
+    updateUI();
+  });
+
+  const rsz = document.createElement('div');
+  rsz.className = 'rsz-handle';
+  makeResizable(rsz, sig, div);
+
+  div.appendChild(img);
+  div.appendChild(del);
+  div.appendChild(rsz);
+  canvasWrap.appendChild(div);
+
+  // Make it draggable within the PDF
+  makeDraggable(div, sig);
+}
+
+function makeDraggable(el, sig){
+  el.addEventListener('pointerdown', e => {
+    if(e.target.classList.contains('del-btn') ||
+       e.target.classList.contains('rsz-handle')) return;
+    e.preventDefault();
+    el.setPointerCapture(e.pointerId);
+    const sx = e.clientX, sy = e.clientY;
+    const ox = sig.x,     oy = sig.y;
+    function onMove(e){
+      sig.x = ox + e.clientX - sx;
+      sig.y = oy + e.clientY - sy;
+      el.style.left = sig.x + 'px';
+      el.style.top  = sig.y + 'px';
+    }
+    function onUp(){
+      el.removeEventListener('pointermove', onMove);
+      el.removeEventListener('pointerup', onUp);
+    }
+    el.addEventListener('pointermove', onMove);
+    el.addEventListener('pointerup', onUp);
+  });
+}
+
+function makeResizable(handle, sig, el){
+  handle.addEventListener('pointerdown', e => {
+    e.preventDefault(); e.stopPropagation();
+    handle.setPointerCapture(e.pointerId);
+    const sx = e.clientX, ow = sig.w, oh = sig.h, ratio = oh/ow;
+    function onMove(e){
+      sig.w = Math.max(40, ow + e.clientX - sx);
+      sig.h = sig.w * ratio;
+      el.style.width  = sig.w + 'px';
+      el.style.height = sig.h + 'px';
+    }
+    function onUp(){
+      handle.removeEventListener('pointermove', onMove);
+      handle.removeEventListener('pointerup', onUp);
+    }
+    handle.addEventListener('pointermove', onMove);
+    handle.addEventListener('pointerup', onUp);
+  });
+}
+
+// ── PDF Loading ───────────────────────────────────────────
+function loadFile(file){
+  if(!file||file.type!=='application/pdf'){ alert('請選擇 PDF'); return; }
+  const r = new FileReader();
+  r.onload = async e => {
+    originalBytes = new Uint8Array(e.target.result);
+    placedSigs = {}; currentPage = 1;
+    await loadPdf(originalBytes);
+  };
+  r.readAsArrayBuffer(file);
+}
+async function loadPdf(bytes){
+  pdfJsDoc = await pdfjsLib.getDocument({data: bytes.slice(0)}).promise;
+  totalPages = pdfJsDoc.numPages;
+  dropHint.style.display = 'none';
+  pageNav.style.display = 'flex';
+  canvasWrap.style.display = 'block';
+  await renderPage(currentPage);
+  updateUI();
+}
+async function renderPage(num){
+  if(renderTask){ try{renderTask.cancel()}catch(e){} }
+  // Remove old sig els
+  canvasWrap.querySelectorAll('.sig-placed').forEach(el => el.remove());
+
+  const page = await pdfJsDoc.getPage(num);
+  const vp = page.getViewport({scale: SCALE});
+  pdfCanvas.width = vp.width; pdfCanvas.height = vp.height;
+  renderTask = page.render({canvasContext: pdfCanvas.getContext('2d'), viewport: vp});
+  await renderTask.promise;
+
+  // Re-add sig els for this page
+  (placedSigs[num]||[]).forEach(sig => addSigEl(sig));
+}
+prevBtn.addEventListener('click', async () => { if(currentPage>1){ currentPage--; await renderPage(currentPage); updateUI(); } });
+nextBtn.addEventListener('click', async () => { if(currentPage<totalPages){ currentPage++; await renderPage(currentPage); updateUI(); } });
+
+function updateUI(){
+  pageInfo.textContent = `${currentPage} / ${totalPages}`;
+  prevBtn.disabled = currentPage<=1; nextBtn.disabled = currentPage>=totalPages;
+  const total = Object.values(placedSigs).reduce((a,b)=>a+b.length, 0);
+  sigCount.textContent = total > 0 ? `已放置 ${total} 個簽名` : '尚未放置簽名';
+  downloadBtn.disabled = total === 0;
+}
+
+// ── Download ──────────────────────────────────────────────
+downloadBtn.addEventListener('click', async () => {
+  downloadBtn.disabled = true; downloadBtn.textContent = '處理中…';
+  try {
+    const {PDFDocument} = PDFLib;
+    const doc = await PDFDocument.load(originalBytes.slice(0));
+    for(const [pgStr, sigs] of Object.entries(placedSigs)){
+      const page = doc.getPage(parseInt(pgStr)-1);
+      const {height: pdfH} = page.getSize();
+      for(const sig of sigs){
+        const bytes = await fetch(sig.dataUrl).then(r=>r.arrayBuffer());
+        const pdfImg = sig.dataUrl.includes('image/png') || !sig.dataUrl.includes('image/jpeg')
+          ? await doc.embedPng(bytes) : await doc.embedJpg(bytes);
+        page.drawImage(pdfImg, {
+          x: sig.x/SCALE,
+          y: pdfH - (sig.y+sig.h)/SCALE,
+          width:  sig.w/SCALE,
+          height: sig.h/SCALE,
+          opacity: 0.9,
+        });
+      }
+    }
+    const blob = new Blob([await doc.save()], {type:'application/pdf'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'signed_' + Date.now() + '.pdf';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  } catch(err){ alert('下載失敗：'+err.message); console.error(err); }
+  finally { downloadBtn.disabled = false; downloadBtn.textContent = '⬇ 下載簽名 PDF'; updateUI(); }
+});
+
+// ── PDF drag & drop ───────────────────────────────────────
+pdfArea.addEventListener('dragover', e => { e.preventDefault(); dropHint.classList.add('drag-over'); });
+pdfArea.addEventListener('dragleave', () => dropHint.classList.remove('drag-over'));
+pdfArea.addEventListener('drop', e => {
+  e.preventDefault(); dropHint.classList.remove('drag-over');
+  loadFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', e => loadFile(e.target.files[0]));
+</script>
+</body>
+</html>
