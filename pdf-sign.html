@@ -514,20 +514,38 @@ function updateUI(){
 downloadBtn.addEventListener('click', async () => {
   downloadBtn.disabled = true; downloadBtn.textContent = '處理中…';
   try {
-    const {PDFDocument} = PDFLib;
+    const {PDFDocument, degrees} = PDFLib;
     const doc = await PDFDocument.load(originalBytes.slice(0));
     for(const [pgStr, sigs] of Object.entries(placedSigs)){
       const page = doc.getPage(parseInt(pgStr)-1);
-      const {height: pdfH} = page.getSize();
+      const {width: pdfW, height: pdfH} = page.getSize();
+      // PDF.js 的 getViewport() 會套用頁面的 /Rotate 來渲染，使用者是在「轉正後」
+      // 的畫面上放簽名；但 pdf-lib 的 drawImage() 走的是「未旋轉」的原始座標系，
+      // getSize() 回傳的也是未旋轉的長寬。頁面有旋轉時兩邊對不上，簽名就會跑掉
+      // （90/270 度的掃描件最明顯，簽名會偏到左邊而且躺著）。
+      const rot = ((page.getRotation().angle % 360) + 360) % 360;
       for(const sig of sigs){
         const bytes = await fetch(sig.dataUrl).then(r=>r.arrayBuffer());
         const pdfImg = sig.dataUrl.includes('image/png') || !sig.dataUrl.includes('image/jpeg')
           ? await doc.embedPng(bytes) : await doc.embedJpg(bytes);
+        // 畫面座標（左上原點、y 往下）→ 點數
+        const vx = sig.x/SCALE, vy = sig.y/SCALE;
+        const vw = sig.w/SCALE, vh = sig.h/SCALE;
+        // 轉回未旋轉的 PDF 座標（左下原點、y 往上），並把圖轉成跟頁面同方向
+        let box;
+        if(rot === 90){
+          box = {x: vy + vh,        y: vx,          rotate: degrees(90)};
+        } else if(rot === 180){
+          box = {x: pdfW - vx,      y: vy + vh,     rotate: degrees(180)};
+        } else if(rot === 270){
+          box = {x: pdfW - vy - vh, y: pdfH - vx,   rotate: degrees(270)};
+        } else {
+          box = {x: vx,             y: pdfH - vy - vh};
+        }
         page.drawImage(pdfImg, {
-          x: sig.x/SCALE,
-          y: pdfH - (sig.y+sig.h)/SCALE,
-          width:  sig.w/SCALE,
-          height: sig.h/SCALE,
+          ...box,
+          width:  vw,
+          height: vh,
           opacity: 0.9,
         });
       }
